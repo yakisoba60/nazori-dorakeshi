@@ -1,0 +1,60 @@
+<!doctype html><html lang="ja"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#111827">
+<title>なぞりドラ消し集計</title>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#f3f4f6;margin:0;color:#111827}
+main{max-width:700px;margin:auto;padding:16px}.card{background:white;border-radius:16px;padding:16px;margin:12px 0}
+button,label{display:block;width:100%;padding:13px;margin:8px 0;border:0;border-radius:12px;background:#111827;color:white;text-align:center;font-size:17px;font-weight:700}
+input[type=file]{display:none}.secondary{background:#e5e7eb;color:#111}.danger{background:#fee2e2;color:#991b1b}
+.progress{height:9px;background:#ddd;border-radius:9px}.bar{height:100%;width:0;background:#111827}.small{font-size:13px;color:#667085}
+table{border-collapse:collapse;width:100%;min-width:600px}th,td{padding:8px;border-bottom:1px solid #eee;text-align:right}th:first-child,td:first-child{text-align:center}
+.wrap{overflow:auto}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}.stat{background:#f8fafc;padding:10px;border-radius:10px}.stat b{display:block;font-size:20px}
+</style></head><body><main>
+<h1>🎮 なぞりドラ消し集計</h1><p class="small">録画1本の中のリザルトを「終了→終了」で連続集計します。</p>
+<div class="card">
+<label for="file">🎥 画面録画を選択</label><input id="file" type="file" accept="video/*">
+<div id="name" class="small"></div><button id="go" style="display:none">解析開始</button>
+<div id="pw" style="display:none" class="progress"><div id="bar" class="bar"></div></div><p id="status" class="small">待機中</p></div>
+<div id="summary" class="card" style="display:none"><div class="grid">
+<div class="stat">回数<b id="n">0</b></div><div class="stat">累計<b id="total">0 WIN</b></div>
+<div class="stat">平均<b id="avg">0.0 WIN/回</b></div><div class="stat">録画時間<b id="time">--</b></div>
+</div></div>
+<div id="out" class="card" style="display:none"><div class="wrap"><table>
+<thead><tr><th>通し番号</th><th>所持WIN</th><th>獲得WIN</th><th>獲得累計WIN</th><th>獲得累計平均WIN</th></tr></thead>
+<tbody id="rows"></tbody></table></div><button id="save" class="secondary">履歴に保存</button></div>
+<div class="card"><h2>履歴</h2><div id="hist" class="small">まだありません</div><button id="clear" class="danger">履歴を全削除</button></div>
+<canvas id="c" style="display:none"></canvas></main>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script>
+let f=null,v=document.createElement("video"),results=[],session=null;const KEY="ndk_history";
+const $=x=>document.getElementById(x);
+$("file").onchange=e=>{f=e.target.files[0];if(f){$("name").textContent=f.name+" / "+(f.size/1048576).toFixed(1)+"MB";$("go").style.display="block"}};
+$("go").onclick=async()=>{
+$("go").disabled=true;$("pw").style.display="block";results=[];v.src=URL.createObjectURL(f);v.muted=true;
+await new Promise((ok,no)=>{v.onloadedmetadata=ok;v.onerror=no});
+let dur=v.duration,cv=$("c"),ctx=cv.getContext("2d"),worker=await Tesseract.createWorker("jpn");
+await worker.setParameters({tessedit_pageseg_mode:"6"});let last="",lastT=-99,pending=null;
+for(let t=0;t<dur;t+=.9){
+ await seek(t);let w=v.videoWidth,h=v.videoHeight,sx=w*.04,sy=h*.45,sw=w*.92,sh=h*.40;
+ cv.width=sw;cv.height=sh;ctx.drawImage(v,sx,sy,sw,sh,0,0,sw,sh);
+ let text=(await worker.recognize(cv)).data.text.replace(/\s+/g," ").replace(/,/g,"");
+ let p=parse(text);
+ if(p){let key=p.p+"|"+p.e;if(key!==last||t-lastT>8){if(pending&&pending.key===key&&t-pending.t<=3){results.push({t,p:p.p,e:p.e});last=key;lastT=t;pending=null}else pending={key,t,p}}}
+ $("bar").style.width=(t/dur*100)+"%";$("status").textContent="解析中 "+fmt(t)+" / "+fmt(dur)+"　検出 "+results.length+"回";
+}
+await worker.terminate();render(dur);$("status").textContent="解析完了："+results.length+"回";$("go").disabled=false;
+};
+function seek(t){return new Promise(r=>{let done=()=>{v.removeEventListener("seeked",done);r()};v.addEventListener("seeked",done);v.currentTime=Math.min(t,v.duration-.01);setTimeout(r,1200)})}
+function parse(s){
+if(!/獲得/.test(s)||!/所持/.test(s))return null;
+let a=s.match(/獲得[^0-9]{0,15}(\d{1,5})/),b=s.match(/所持[^0-9]{0,15}(\d{2,7})/);
+if(!a||!b)return null;let e=+a[1],p=+b[1];if(e<1||e>5000||p<e)return null;return{e,p};
+}
+function fmt(x){let m=Math.floor(x/60),s=Math.floor(x%60);return m+"分"+s+"秒"}
+function render(dur){let cum=0;$("rows").innerHTML="";results.forEach((r,i)=>{cum+=r.e;$("rows").insertAdjacentHTML("beforeend",`<tr><td>${i+1}</td><td>${r.p.toLocaleString()}</td><td>+${r.e.toLocaleString()}</td><td>${cum.toLocaleString()}</td><td>${(cum/(i+1)).toFixed(1)}</td></tr>`)});$("n").textContent=results.length;$("total").textContent=cum.toLocaleString()+" WIN";$("avg").textContent=(results.length?cum/results.length:0).toFixed(1)+" WIN/回";$("time").textContent=fmt(dur);$("summary").style.display="block";$("out").style.display="block";session={date:new Date().toISOString(),file:f.name,dur,results}}
+function getH(){try{return JSON.parse(localStorage.getItem(KEY)||"[]")}catch(e){return[]}}
+function hist(){let a=getH();$("hist").innerHTML=a.length?a.map(x=>new Date(x.date).toLocaleString("ja-JP")+" / "+x.results.length+"回 / "+x.results.reduce((s,r)=>s+r.e,0).toLocaleString()+" WIN").join("<hr>"):"まだありません"}
+$("save").onclick=()=>{if(session){let a=getH();a.unshift(session);localStorage.setItem(KEY,JSON.stringify(a));hist();$("status").textContent="履歴に保存しました"}};
+$("clear").onclick=()=>{if(confirm("履歴を全削除しますか？")){localStorage.removeItem(KEY);hist()}};hist();
+</script></body></html>
